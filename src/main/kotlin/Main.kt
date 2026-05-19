@@ -117,7 +117,6 @@ fun main() {
                 saveChatId(chatId)
                 userStates[chatId] = BotState.NONE
 
-                // Оновлена клавіатура з новою кнопкою внизу
                 val keyboard = KeyboardReplyMarkup(
                     keyboard = listOf(
                         listOf(KeyboardButton("🛒 Список покупок"), KeyboardButton("🎯 Наші цілі")),
@@ -154,17 +153,13 @@ fun main() {
                     safeText == "🛒 Список покупок" -> showShoppingList(bot, chatId)
                     safeText == "🎯 Наші цілі" -> showGoalsList(bot, chatId)
 
-                    // Обробка нової кнопки
                     safeText == "✨ Надихни нас" -> {
-                        // Відправляємо "заглушку", щоб показати, що бот працює
                         bot.sendMessage(ChatId.fromId(chatId), "⏳ Запитую ШІ...")
 
-                        // Запускаємо генерацію в окремому потоці, щоб не підвисав бот
                         CoroutineScope(Dispatchers.IO).launch {
                             val aiMessage = generateAiMessage()
                             val allChatIds = try { getAllChatIds() } catch (e: Exception) { setOf(chatId) }
 
-                            // Розсилаємо всім!
                             allChatIds.forEach { id ->
                                 bot.sendMessage(ChatId.fromId(id), "💌 $aiMessage")
                             }
@@ -222,9 +217,10 @@ fun main() {
     }
     bot.startPolling()
 
+    // Автоматична розсилка (тепер кожні 3 години)
     CoroutineScope(Dispatchers.Default).launch {
         while (isActive) {
-            delay(4.hours)
+            delay(3.hours)
             val chatIds = try { getAllChatIds() } catch (e: Exception) { emptySet() }
 
             if (chatIds.isNotEmpty()) {
@@ -276,12 +272,30 @@ fun updateGoalsMessage(bot: com.github.kotlintelegrambot.Bot, chatId: Long, mess
 }
 
 fun generateAiMessage(): String {
-    val apiKey = System.getenv("GEMINI_API_KEY") ?: return "Помилка: Немає ключа GEMINI_API_KEY"
+    val apiKey = System.getenv("GEMINI_API_KEY") ?: return "Гарного дня! ❤️"
     val url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key=$apiKey"
 
-    val prompt = "Напиши одне коротке, миле та мотивуюче повідомлення для мене та моєї дівчини Насосика. Без привітань, одразу текст. Можна згадати смачну каву, котів або побажати успіхів з нашим додатком PushUp ScrollDown."
+    // Базовий промпт
+    var prompt = "Напиши одне коротке, миле та мотивуюче повідомлення для мене та моєї дівчини Насосика. " +
+            "Без привітань, одразу текст українською мовою. Можна згадати смачну каву, котів або побажати успіхів з нашим додатком PushUp ScrollDown."
+
+    // Кидаємо кубик від 1 до 4 (імовірність 25%) для аніме-пасхалок
+    val randomChance = (1..4).random()
+    if (randomChance == 1) {
+        prompt += " ВАЖЛИВО: обов'язково додай у текст тонку пасхалку, метафору, вайб або крилату фразу з наших улюблених аніме: " +
+                "'Магічна битва' (Jujutsu Kaisen), 'Людина-бензопила' (Chainsaw Man), 'Пекельний рай' (Hell's Paradise) або 'Аркейн' (Arcane). " +
+                "Це має виглядати природно і мило, надихаючи нас рухатися вперед."
+    }
 
     val jsonBody = """{"contents":[{"parts":[{"text":"$prompt"}]}]}"""
+
+    // Наші 4 запасні (fallback) повідомлення на випадок збоїв ШІ
+    val fallbackMessages = listOf(
+        "Котики, ШІ зараз відпочиває, але ви все одно найкращі! Гарного дня і найсмачнішої кави ☕️",
+        "Сьогодні без штучного інтелекту, бо він пішов гладити котів 🐈. Бажаю вам шалених успіхів з PushUp ScrollDown!",
+        "Навіть коли технології дають збій, ви впораєтеся з усіма цілями! Насосик, ти супер ❤️",
+        "Мотивація на сьогодні: ви самі творці свого успіху! Обіймаю вас і бажаю продуктивного дня 🚀"
+    )
 
     return try {
         val client = HttpClient.newHttpClient()
@@ -293,9 +307,9 @@ fun generateAiMessage(): String {
 
         val response = client.send(request, HttpResponse.BodyHandlers.ofString())
 
-        // ДЕТЕКТИВ: Якщо статус не 200 (OK), відправляємо помилку прямо в чат
+        // Якщо сервер повернув помилку (наприклад 404, 500, тощо) - віддаємо випадкове повідомлення зі списку
         if (response.statusCode() != 200) {
-            return "ШІ повернув помилку ${response.statusCode()}: ${response.body()}"
+            return fallbackMessages.random()
         }
 
         val jsonObject = JsonParser.parseString(response.body()).asJsonObject
@@ -309,7 +323,7 @@ fun generateAiMessage(): String {
 
         text.trim()
     } catch (e: Exception) {
-        // ДЕТЕКТИВ: Якщо впав сам код (наприклад Gson), покажемо це
-        "Внутрішня помилка: ${e.javaClass.simpleName} - ${e.message}"
+        // Якщо впав сам код (наприклад, зник зв'язок) - теж повертаємо випадкове повідомлення
+        fallbackMessages.random()
     }
 }

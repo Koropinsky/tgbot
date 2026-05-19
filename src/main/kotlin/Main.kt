@@ -276,7 +276,7 @@ fun updateGoalsMessage(bot: com.github.kotlintelegrambot.Bot, chatId: Long, mess
 }
 
 fun generateAiMessage(): String {
-    val apiKey = System.getenv("GEMINI_API_KEY") ?: return "Гарного дня! ❤️"
+    val apiKey = System.getenv("GEMINI_API_KEY") ?: return "Помилка: Немає ключа GEMINI_API_KEY"
     val url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=$apiKey"
 
     val prompt = "Напиши одне коротке, миле та мотивуюче повідомлення для мене та моєї дівчини Насосика. Без привітань, одразу текст. Можна згадати смачну каву, котів або побажати успіхів з нашим додатком PushUp ScrollDown."
@@ -292,6 +292,12 @@ fun generateAiMessage(): String {
             .build()
 
         val response = client.send(request, HttpResponse.BodyHandlers.ofString())
+
+        // ДЕТЕКТИВ: Якщо статус не 200 (OK), відправляємо помилку прямо в чат
+        if (response.statusCode() != 200) {
+            return "ШІ повернув помилку ${response.statusCode()}: ${response.body()}"
+        }
+
         val jsonObject = JsonParser.parseString(response.body()).asJsonObject
 
         val text = jsonObject.getAsJsonArray("candidates")
@@ -303,7 +309,7 @@ fun generateAiMessage(): String {
 
         text.trim()
     } catch (e: Exception) {
-        println("Помилка генерації: ${e.message}")
-        "Котики, ви найкращі! Гарного дня 🚀"
+        // ДЕТЕКТИВ: Якщо впав сам код (наприклад Gson), покажемо це
+        "Внутрішня помилка: ${e.javaClass.simpleName} - ${e.message}"
     }
 }

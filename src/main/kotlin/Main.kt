@@ -19,7 +19,22 @@ enum class BotState { NONE, ADDING_SHOPPING, ADDING_GOAL }
 val userStates = mutableMapOf<Long, BotState>()
 
 fun getDatabaseConnection(): Connection {
-    val rawUrl = System.getenv("DATABASE_URL") ?: "jdbc:postgresql://localhost:5432/postgres"
+    val rawUrl = System.getenv("DATABASE_URL") ?: return DriverManager.getConnection("jdbc:postgresql://localhost:5432/postgres")
+
+    if (rawUrl.startsWith("postgres://") || rawUrl.startsWith("postgresql://")) {
+        val uri = URI(rawUrl)
+        val userInfo = uri.userInfo?.split(":")
+        val user = userInfo?.getOrNull(0) ?: ""
+        val password = userInfo?.getOrNull(1) ?: ""
+
+        val host = uri.host
+        val port = if (uri.port != -1) uri.port else 5432
+        val path = uri.path
+
+        val jdbcUrl = "jdbc:postgresql://$host:$port$path?sslmode=require&user=$user&password=$password"
+        return DriverManager.getConnection(jdbcUrl)
+    }
+
     val dbUrl = if (rawUrl.startsWith("jdbc:")) rawUrl else "jdbc:$rawUrl"
     return DriverManager.getConnection(dbUrl)
 }
@@ -102,8 +117,12 @@ fun main() {
                 saveChatId(chatId)
                 userStates[chatId] = BotState.NONE
 
+                // Оновлена клавіатура з новою кнопкою внизу
                 val keyboard = KeyboardReplyMarkup(
-                    keyboard = listOf(listOf(KeyboardButton("🛒 Список покупок"), KeyboardButton("🎯 Наші цілі"))),
+                    keyboard = listOf(
+                        listOf(KeyboardButton("🛒 Список покупок"), KeyboardButton("🎯 Наші цілі")),
+                        listOf(KeyboardButton("✨ Надихни нас"))
+                    ),
                     resizeKeyboard = true
                 )
                 bot.sendMessage(ChatId.fromId(chatId), "Привіт! Я ваш сімейний бот.\nМожна додавати кнопками, або швидко через текст:\n`+Молоко`\n`*Нова ціль`", replyMarkup = keyboard)
@@ -115,7 +134,6 @@ fun main() {
                 val safeText = text.trim()
 
                 when {
-                    // 1. Додавання через кнопки (попередньо натиснули "Додати")
                     state == BotState.ADDING_SHOPPING -> {
                         if (safeText.isNotEmpty()) {
                             addShoppingItem(safeText)
@@ -133,11 +151,26 @@ fun main() {
                         }
                     }
 
-                    // 2. Виклик меню
                     safeText == "🛒 Список покупок" -> showShoppingList(bot, chatId)
                     safeText == "🎯 Наші цілі" -> showGoalsList(bot, chatId)
 
-                    // 3. Швидке додавання через текст (+ та *)
+                    // Обробка нової кнопки
+                    safeText == "✨ Надихни нас" -> {
+                        // Відправляємо "заглушку", щоб показати, що бот працює
+                        bot.sendMessage(ChatId.fromId(chatId), "⏳ Запитую ШІ...")
+
+                        // Запускаємо генерацію в окремому потоці, щоб не підвисав бот
+                        CoroutineScope(Dispatchers.IO).launch {
+                            val aiMessage = generateAiMessage()
+                            val allChatIds = try { getAllChatIds() } catch (e: Exception) { setOf(chatId) }
+
+                            // Розсилаємо всім!
+                            allChatIds.forEach { id ->
+                                bot.sendMessage(ChatId.fromId(id), "💌 $aiMessage")
+                            }
+                        }
+                    }
+
                     safeText.startsWith("+") -> {
                         val item = safeText.removePrefix("+").trim()
                         if (item.isNotEmpty()) {
@@ -191,15 +224,13 @@ fun main() {
 
     CoroutineScope(Dispatchers.Default).launch {
         while (isActive) {
-            delay(4.hours) // Розсилка кожні 4 години
+            delay(4.hours)
             val chatIds = try { getAllChatIds() } catch (e: Exception) { emptySet() }
 
             if (chatIds.isNotEmpty()) {
-                // Звертаємося до ШІ за свіжим повідомленням
                 val aiMessage = generateAiMessage()
-
                 chatIds.forEach { id ->
-                    bot.sendMessage(ChatId.fromId(id), text = aiMessage)
+                    bot.sendMessage(ChatId.fromId(id), text = "💌 $aiMessage")
                 }
             }
         }
@@ -245,10 +276,9 @@ fun updateGoalsMessage(bot: com.github.kotlintelegrambot.Bot, chatId: Long, mess
 }
 
 fun generateAiMessage(): String {
-    val apiKey = System.getenv("GEMINI_API_KEY") ?: return "Гарного дня! ❤️" // Фолбек, якщо ключа немає
+    val apiKey = System.getenv("GEMINI_API_KEY") ?: return "Гарного дня! ❤️"
     val url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=$apiKey"
 
-    // Тут ти можеш налаштувати промпт як завгодно!
     val prompt = "Напиши одне коротке, миле та мотивуюче повідомлення для мене та моєї дівчини Насосика. Без привітань, одразу текст. Можна згадати смачну каву, котів або побажати успіхів з нашим додатком PushUp ScrollDown."
 
     val jsonBody = """{"contents":[{"parts":[{"text":"$prompt"}]}]}"""
@@ -264,7 +294,6 @@ fun generateAiMessage(): String {
         val response = client.send(request, HttpResponse.BodyHandlers.ofString())
         val jsonObject = JsonParser.parseString(response.body()).asJsonObject
 
-        // Витягуємо сам текст з відповіді Gemini
         val text = jsonObject.getAsJsonArray("candidates")
             .get(0).asJsonObject
             .getAsJsonObject("content")
@@ -275,6 +304,6 @@ fun generateAiMessage(): String {
         text.trim()
     } catch (e: Exception) {
         println("Помилка генерації: ${e.message}")
-        "Котики, ви найкращі! Гарного дня 🚀" // Повідомлення на випадок, якщо API відвалиться
+        "Котики, ви найкращі! Гарного дня 🚀"
     }
 }

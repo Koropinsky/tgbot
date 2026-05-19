@@ -277,7 +277,7 @@ fun updateGoalsMessage(bot: com.github.kotlintelegrambot.Bot, chatId: Long, mess
 
 fun generateAiMessage(): String {
     val apiKey = System.getenv("GEMINI_API_KEY") ?: return "Помилка: Немає ключа GEMINI_API_KEY"
-    val url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key=$apiKey"
+    val url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key=$apiKey"
 
     val prompt = "Напиши одне коротке, миле та мотивуюче повідомлення для мене та моєї дівчини Насосика. Без привітань, одразу текст. Можна згадати смачну каву, котів або побажати успіхів з нашим додатком PushUp ScrollDown."
 

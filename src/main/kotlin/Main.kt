@@ -220,6 +220,25 @@ fun main() {
     }
     bot.startPolling()
 
+    CoroutineScope(Dispatchers.Default).launch {
+        val zoneId = ZoneId.of("Europe/Kyiv")
+        while (isActive) {
+            val now = ZonedDateTime.now(zoneId)
+            var next7AM = now.withHour(7).withMinute(0).withSecond(0).withNano(0)
+            if (now.isAfter(next7AM)) next7AM = next7AM.plusDays(1)
+
+            delay(ChronoUnit.MILLIS.between(now, next7AM))
+
+            val chatIds = try { getAllChatIds() } catch (e: Exception) { emptySet() }
+            if (chatIds.isNotEmpty()) {
+                val weather = getPoltavaWeather()
+                val aiMessage = generateAiMessage()
+                chatIds.forEach { id ->
+                    bot.sendMessage(ChatId.fromId(id), text = "🌅 *Доброго ранку!*\n\n$weather\n\n$aiMessage", parseMode = ParseMode.MARKDOWN)
+                }
+            }
+        }
+    }
     // 1. Автоматична розсилка (кожні 3 години)
     CoroutineScope(Dispatchers.Default).launch {
         while (isActive) {
@@ -264,6 +283,24 @@ fun main() {
     }
 }
 
+fun getPoltavaWeather(): String {
+    val apiKey = System.getenv("WEATHER_API_KEY") ?: return "Погода: API ключ не знайдено."
+    val url = "https://api.openweathermap.org/data/2.5/weather?q=Poltava,ua&appid=$apiKey&units=metric&lang=uk"
+
+    return try {
+        val client = HttpClient.newHttpClient()
+        val request = HttpRequest.newBuilder().uri(URI.create(url)).build()
+        val response = client.send(request, HttpResponse.BodyHandlers.ofString())
+        val json = JsonParser.parseString(response.body()).asJsonObject
+
+        val temp = json.getAsJsonObject("main").get("temp").asDouble.toInt()
+        val desc = json.getAsJsonArray("weather").get(0).asJsonObject.get("description").asString
+
+        "🌤 Погода в Полтаві: ${temp}°C, $desc."
+    } catch (e: Exception) {
+        "Не вдалося дізнатися погоду."
+    }
+}
 fun showShoppingList(bot: com.github.kotlintelegrambot.Bot, chatId: Long) {
     val list = getShoppingList()
     val buttons = list.map { (id, item) -> listOf(InlineKeyboardButton.CallbackData("❌ $item", "del_shop_$id")) }.toMutableList()

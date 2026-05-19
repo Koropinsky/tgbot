@@ -34,8 +34,8 @@ fun main() {
                 val chatId = message.chat.id
                 if (!userChatIds.contains(chatId)) userChatIds.add(chatId)
 
-                val keyboard = ReplyKeyboardMarkup.create(
-                    listOf(
+                val keyboard = KeyboardReplyMarkup(
+                    keyboard = listOf(
                         listOf(KeyboardButton("🛒 Список покупок"), KeyboardButton("🎯 Наші цілі"))
                     ),
                     resizeKeyboard = true

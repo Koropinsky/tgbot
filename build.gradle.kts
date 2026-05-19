@@ -13,13 +13,13 @@ repositories {
 }
 
 dependencies {
-    // Telegram Bot API
     implementation("io.github.kotlin-telegram-bot.kotlin-telegram-bot:telegram:6.1.0")
-    // Coroutines для таймерів розсилки
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.7.3")
+    // Драйвер для підключення до бази даних PostgreSQL
+    implementation("org.postgresql:postgresql:42.7.2")
+    implementation("com.google.code.gson:gson:2.10.1")
 }
 
 application {
-    // Вказуємо головний клас. Якщо файл Main.kt, то клас буде MainKt
     mainClass.set("MainKt")
 }

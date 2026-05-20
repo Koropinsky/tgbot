@@ -22,7 +22,7 @@ import kotlin.time.Duration.Companion.hours
 enum class BotState { NONE, ADDING_SHOPPING, ADDING_GOAL }
 val userStates = mutableMapOf<Long, BotState>()
 
-// Словник для збереження останньої рекомендації (chatId -> (category, title))
+// Пам'ять для тимчасового збереження назви перед тим, як ви поставите оцінку
 val lastRecommendations = ConcurrentHashMap<Long, Pair<String, String>>()
 
 fun getDatabaseConnection(): Connection {
@@ -52,20 +52,32 @@ fun initDatabase() {
                 CREATE TABLE IF NOT EXISTS watched_list (id SERIAL PRIMARY KEY, category TEXT NOT NULL, title TEXT NOT NULL);
             """.trimIndent())
         }
+
+        // Додаємо колонку для оцінки (якщо її ще немає)
+        try {
+            getDatabaseConnection().use { conn ->
+                conn.createStatement().execute("ALTER TABLE watched_list ADD COLUMN rating INT DEFAULT 0;")
+            }
+        } catch (e: Exception) {
+            // Якщо помилка, значить колонка вже існує, ігноруємо
+        }
+
+        println("Database initialized successfully.")
     } catch (e: Exception) { println("Database init error: ${e.message}") }
 }
 
-fun getWatchedList(category: String): List<String> = mutableListOf<String>().apply {
+fun getWatchedListWithRatings(category: String): List<Pair<String, Int>> = mutableListOf<Pair<String, Int>>().apply {
     getDatabaseConnection().use { conn ->
-        val rs = conn.prepareStatement("SELECT title FROM watched_list WHERE category = ?").apply { setString(1, category) }.executeQuery()
-        while (rs.next()) add(rs.getString("title"))
+        val rs = conn.prepareStatement("SELECT title, rating FROM watched_list WHERE category = ?").apply { setString(1, category) }.executeQuery()
+        while (rs.next()) add(rs.getString("title") to rs.getInt("rating"))
     }
 }
 
-fun addWatchedItem(category: String, title: String) = getDatabaseConnection().use { conn ->
-    conn.prepareStatement("INSERT INTO watched_list (category, title) VALUES (?, ?)").apply {
+fun addWatchedItem(category: String, title: String, rating: Int) = getDatabaseConnection().use { conn ->
+    conn.prepareStatement("INSERT INTO watched_list (category, title, rating) VALUES (?, ?, ?)").apply {
         setString(1, category)
         setString(2, title)
+        setInt(3, rating)
         executeUpdate()
     }
 }
@@ -226,17 +238,16 @@ fun main() {
                         if (messageId != null) updateGoalsMessage(bot, chatId, messageId)
                     }
 
-                    // Обробка запитів на рекомендацію
+                    // Запит на генерацію рекомендації
                     data.startsWith("rec_") -> {
                         val category = data.removePrefix("rec_")
-                        bot.answerCallbackQuery(callbackQuery.id, "Генерую...")
+                        bot.answerCallbackQuery(callbackQuery.id, "Генерую підбірку...")
 
                         CoroutineScope(Dispatchers.IO).launch {
                             val recommendation = generateRecommendation(category)
-                            // ШІ поверне назву на найпершому рядку. Беремо її.
                             val title = recommendation.lines().firstOrNull()?.replace(Regex("[*\"_]"), "")?.trim() ?: "Невідомий тайтл"
 
-                            // Зберігаємо в пам'ять для кнопки "Вже дивились"
+                            // Зберігаємо в оперативну пам'ять
                             lastRecommendations[chatId] = Pair(category, title)
 
                             val btn = InlineKeyboardMarkup.create(
@@ -246,21 +257,47 @@ fun main() {
                         }
                     }
 
-                    // Обробка кнопки "Вже дивились"
+                    // Натиснули "Вже дивились" -> показуємо зірочки
                     data == "mark_watched" -> {
                         val rec = lastRecommendations[chatId]
                         if (rec != null) {
-                            addWatchedItem(rec.first, rec.second)
-                            bot.answerCallbackQuery(callbackQuery.id, "✅ Додано до переглянутого!")
+                            bot.answerCallbackQuery(callbackQuery.id)
+                            val ratingKeyboard = InlineKeyboardMarkup.create(
+                                listOf(
+                                    listOf(
+                                        InlineKeyboardButton.CallbackData("1⭐", "rate_1"),
+                                        InlineKeyboardButton.CallbackData("2⭐", "rate_2"),
+                                        InlineKeyboardButton.CallbackData("3⭐", "rate_3"),
+                                        InlineKeyboardButton.CallbackData("4⭐", "rate_4"),
+                                        InlineKeyboardButton.CallbackData("5⭐", "rate_5")
+                                    )
+                                )
+                            )
+                            if (messageId != null) {
+                                bot.editMessageReplyMarkup(ChatId.fromId(chatId), messageId, replyMarkup = ratingKeyboard)
+                                bot.sendMessage(ChatId.fromId(chatId), "Оцініть «${rec.second}» від 1 до 5:")
+                            }
+                        } else {
+                            bot.answerCallbackQuery(callbackQuery.id, "Час очікування минув.", showAlert = true)
+                        }
+                    }
 
-                            // Прибираємо кнопку
+                    // Зберігаємо оцінку в БД
+                    data.startsWith("rate_") -> {
+                        val rating = data.removePrefix("rate_").toIntOrNull() ?: 0
+                        val rec = lastRecommendations[chatId]
+
+                        if (rec != null) {
+                            addWatchedItem(rec.first, rec.second, rating)
+                            bot.answerCallbackQuery(callbackQuery.id, "✅ Оцінка $rating⭐ збережена!")
+
                             if (messageId != null) {
                                 bot.editMessageReplyMarkup(ChatId.fromId(chatId), messageId, replyMarkup = null)
                             }
-                            bot.sendMessage(ChatId.fromId(chatId), "Запам'ятав! Більше не буду радити «${rec.second}».")
-                            lastRecommendations.remove(chatId) // Чистимо пам'ять
+                            bot.sendMessage(ChatId.fromId(chatId), "Запам'ятав! Ви оцінили «${rec.second}» на $rating⭐. ШІ врахує це наступного разу!")
+                            lastRecommendations.remove(chatId)
                         } else {
-                            bot.answerCallbackQuery(callbackQuery.id, "Час очікування минув або помилка.", showAlert = true)
+                            bot.answerCallbackQuery(callbackQuery.id, "Помилка збереження.", showAlert = true)
                         }
                     }
                 }
@@ -269,7 +306,7 @@ fun main() {
     }
     bot.startPolling()
 
-    // 1. Ранкова розсилка о 7:00
+    // Корутини для розсилок (без змін)
     CoroutineScope(Dispatchers.Default).launch {
         val zoneId = ZoneId.of("Europe/Kyiv")
         while (isActive) {
@@ -281,7 +318,6 @@ fun main() {
         }
     }
 
-    // 2. Денна розсилка кожні 4 години (7:00-22:00)
     CoroutineScope(Dispatchers.Default).launch {
         while (isActive) {
             delay(4.hours)
@@ -292,7 +328,6 @@ fun main() {
         }
     }
 
-    // 3. Цитата дня о 10:00
     CoroutineScope(Dispatchers.Default).launch {
         val zoneId = ZoneId.of("Europe/Kyiv")
         while (isActive) {
@@ -305,24 +340,34 @@ fun main() {
     }
 }
 
-// === НОВА ФУНКЦІЯ ДЛЯ РЕКОМЕНДАЦІЙ ===
+// === ФУНКЦІЯ РОЗУМНИХ РЕКОМЕНДАЦІЙ З ОЦІНКАМИ ===
 fun generateRecommendation(category: String): String {
-    val watchedList = getWatchedList(category).joinToString(", ")
-    val avoidContext = if (watchedList.isNotEmpty()) "Ми вже дивилися ці тайтли, тому НІЯК НЕ РЕКОМЕНДУЙ ЇХ: $watchedList." else ""
+    val watchedItems = getWatchedListWithRatings(category)
+
+    // Формуємо контекст з оцінками
+    val watchedContext = if (watchedItems.isNotEmpty()) {
+        val listStr = watchedItems.joinToString(", ") { "${it.first} (${it.second}/5)" }
+        "Ось що ми вже дивилися та наші оцінки (від 1 до 5): $listStr. " +
+                "НІЯК НЕ РЕКОМЕНДУЙ ТЕ, ЩО МИ ВЖЕ ДИВИЛИСЯ! " +
+                "Аналізуй оцінки: рекомендуй щось схоже за вайбом на те, що ми оцінили на 4 або 5, і уникай того, що схоже на наші оцінки 1-3."
+    } else ""
+
+    // Враховуємо ваші смаки в аніме за замовчуванням
+    val extraAnimeContext = if (category == "anime") "Ми обожнюємо екшен і дарк-фентезі. 'Людина-бензопила', 'Магічна битва', 'Пекельний рай' та 'Аркейн' — це наші еталони на 5/5! " else ""
 
     val categoryContext = when (category) {
-        "movie" -> "крутий фільм"
-        "series" -> "цікавий серіал"
-        "anime" -> "аніме (врахуй, що нам дуже подобається екшен і дарк-фентезі, як от Jujutsu Kaisen, Chainsaw Man, Berserk, Black Clover та Arcane, але запропонуй щось інше, що також захоплює)"
+        "movie" -> "цікавий фільм"
+        "series" -> "захоплюючий серіал"
+        "anime" -> "аніме"
         else -> "фільм"
     }
 
-    val prompt = "Порекомендуй один $categoryContext для вечірнього перегляду. $avoidContext " +
-            "ВАЖЛИВО: Твоя відповідь має складатися з двох частин. " +
-            "На САМОМУ ПЕРШОМУ РЯДКУ напиши ТІЛЬКИ назву оригіналу (без слів 'Назва', без лапок і вступів). " +
+    val prompt = "Порекомендуй один $categoryContext для вечірнього перегляду для пари. $extraAnimeContext $watchedContext " +
+            "ВАЖЛИВО: Відповідь має складатися з двох частин. " +
+            "На САМОМУ ПЕРШОМУ РЯДКУ напиши ТІЛЬКИ назву оригіналу (без слів 'Назва', без лапок, без зірочок). " +
             "Починаючи з другого рядка напиши короткий і захоплюючий опис без спойлерів українською мовою."
 
-    return fetchFromGemini(prompt, listOf("Здається, я передивився всі бази! Спробуй ще раз пізніше. 😅"))
+    return fetchFromGemini(prompt, listOf("Здається, я передивився всі бази! Спробуйте ще раз пізніше. 😅"))
 }
 
 fun getPoltavaWeather(): String {
@@ -384,30 +429,15 @@ fun fetchFromGemini(prompt: String, fallbackMessages: List<String>): String {
 
     return try {
         val client = HttpClient.newHttpClient()
-        val request = HttpRequest.newBuilder()
-            .uri(URI.create(url))
-            .header("Content-Type", "application/json")
-            .POST(HttpRequest.BodyPublishers.ofString(jsonBody))
-            .build()
-
+        val request = HttpRequest.newBuilder().uri(URI.create(url)).header("Content-Type", "application/json").POST(HttpRequest.BodyPublishers.ofString(jsonBody)).build()
         val response = client.send(request, HttpResponse.BodyHandlers.ofString())
 
-        if (response.statusCode() != 200) {
-            return fallbackMessages.random()
-        }
+        if (response.statusCode() != 200) return fallbackMessages.random()
 
-        val jsonObject = JsonParser.parseString(response.body()).asJsonObject
-        val text = jsonObject.getAsJsonArray("candidates")
-            .get(0).asJsonObject
-            .getAsJsonObject("content")
-            .getAsJsonArray("parts")
-            .get(0).asJsonObject
-            .get("text").asString
-
-        text.trim()
-    } catch (e: Exception) {
-        fallbackMessages.random()
-    }
+        JsonParser.parseString(response.body()).asJsonObject.getAsJsonArray("candidates")
+            .get(0).asJsonObject.getAsJsonObject("content").getAsJsonArray("parts")
+            .get(0).asJsonObject.get("text").asString.trim()
+    } catch (e: Exception) { fallbackMessages.random() }
 }
 
 fun generateAiMessage(isMorning: Boolean): String {
@@ -420,19 +450,13 @@ fun generateAiMessage(isMorning: Boolean): String {
         "Напиши мотивуюче ранкове привітання. Побажай мені продуктивного програмування з самого ранку, а Насосику — легкого та успішного початку дня в її офісі. Нехай день пройде на одному диханні.",
         "Напиши ранкове мотиваційне повідомлення, використовуючи метафору з аніме 'Магічна битва' (Jujutsu Kaisen). Натякни, що з самого ранку ми розгортаємо таку 'Територію', де офісна рутина Насосика та мої баги зникнуть перед нашою супер-командою.",
         "Напиши бадьоре ранкове привітання для пари айтішника та офісного працівника. Побажай Насосику швидкої дороги до офісу без заторів, а мені — щоб ранковий сод відразу компилювався.",
-        "Напиши амбітне ранкове повідомлення: сьогодні новий день, щоб зробити наш PushUp ScrollDown ще кращим. Нехай Насосика надихає її ранок в офісі, а мене — мій код.",
-        "Напиши ранкове повідомлення про те, як приємно, що в нас обох є свої цілі — у Насосика в офісі, у мене в коді, — але найголовніша мета — це наш спільний затишний вечір.",
-        "Напиши ранковий прогноз: сьогоднішній день для Насосика пройде легко, як по маслу, а в моєму коді не буде жодного 'дедлоку'. Гарного старту!",
-        "Напиши ранкове повідомлення з акцентом на котів: вони вже чекають на нас ввечері, а поки що бажають нам обом продуктивно розібратися зі своїми справами — офісними та розробницькими.",
-        "Напиши мотивацію: кожен виконаний сьогодні таск в офісі чи коді — це ще один крок до нашого успішного релізу PushUp ScrollDown."
+        "Напиши амбітне ранкове повідомлення: сьогодні новий день, щоб зробити наш PushUp ScrollDown ще кращим. Нехай Насосика надихає її ранок в офісі, а мене — мій код."
     )
-
     val daytimePrompts = listOf(
-        "Напиши дуже ніжне повідомлення, щоб підтримати Насосика посеред її насиченого офісного дня. Нагадай, що вдома на неї чекають коти і хлопець-програміст, який її сильно любить і нудьгує.",
+        "Напиши дуже ніжне повідомлення, щоб підтримати Насосика посеред її насиченого офісного дня. Нагадай, що вдома на неї чекають коти і хлопець-програміст, який її сильно любить.",
         "Напиши мотивуюче повідомлення про наш додаток PushUp ScrollDown. Побажай мені продуктивного програмування, а Насосику — швидкого вирішення офісних справ.",
         "Напиши веселе денне повідомлення в стилі 'Людини-бензопили' (Chainsaw Man). Щось про те, що Насосик на обідній перерві розкидала всі офісні таски, а я розрізав складні алгоритми з енергією Дендзі.",
         "Напиши повідомлення з вайбом 'Аркейну': ми в різних світах (офіс і кодинг), але разом створюємо Хекстек-магію нашого життя.",
-        "Напиши короткий, добрий і життєвий жарт, який змусить Насосика посміхнутися на офісній перерві від звітів, а мене — відволіктися від монітора і розім'ятися.",
         "Напиши життєве повідомлення про те, як коти сумують вдома посеред дня: чекають, поки Насосик приїде з офісу, і лізуть на клавіатуру до мене, поки я намагаюся кодити.",
         "Напиши підтримку: офісні звіти Насосика та мої технічні завдання — це просто крок до нашої спільної мети. Ви супер!",
         "Напиши підтримку: навіть якщо сьогоднішній день здається нескінченним, пам'ятай — ми з Насосиком супергерої, які просто прикидаються звичайними людьми в офісі та за монітором.",
@@ -440,7 +464,6 @@ fun generateAiMessage(isMorning: Boolean): String {
         "Напиши повідомлення про те, як важливо в робочому хаосі знайти хвилину, щоб випити смачної кави й згадати, що ми команда. Насосик, ти молодець, тримайся там!",
         "Напиши повідомлення з вайбом 'спокою посеред шторму': у Насосика в офісі — дедлайни, у мене — баги, але вдома — спокій, коти й наш спільний світ."
     )
-
     val eveningPrompts = listOf(
         "Напиши затишне вечірнє повідомлення. Робочий день закінчився, офіс і код позаду. Час насолодитися вечором разом.",
         "Напиши повідомлення про те, як класно бути вдома: коти, затишок, жодних нарад чи багів. Вечір належить тільки нам.",
@@ -453,43 +476,10 @@ fun generateAiMessage(isMorning: Boolean): String {
         "Напиши повідомлення про те, що робота — це лише спосіб оплатити наш спільний затишний вечір. Ми це зробили!"
     )
 
-    val selectedList = when {
-        isMorning -> morningPrompts
-        isEvening -> eveningPrompts
-        else -> daytimePrompts
-    }
+    val selectedList = when { isMorning -> morningPrompts; isEvening -> eveningPrompts; else -> daytimePrompts }
+    val finalPrompt = "${selectedList.random()} ВАЖЛИВО: Напиши лише сам текст повідомлення українською мовою. Без лапок, без вступних слів і привітань."
 
-    val selectedPrompt = selectedList.random()
-    val finalPrompt = "$selectedPrompt ВАЖЛИВО: Напиши лише сам текст повідомлення українською мовою. Без лапок, без вступних слів і привітань."
-
-    val fallbackMessages = if (isMorning) {
-        listOf(
-            "Доброго ранку, соні! ☕️ Кава готова, коти нагодовані. Насосику — легкого дня в офісі, а тобі — успішного коду!",
-            "З новим ранком! 🌅 Нехай кава додасть енергії, баги самі злякаються, а офісні таски Насті вирішаться клацанням пальців!"
-        )
-    } else if (isEvening) {
-        listOf(
-            "Робочий день позаду! Котики чекають, кава гріється. Насолоджуйтесь вечором, ви найкраща команда! ❤️",
-            "Час відкласти звіти і код. Сьогоднішній вечір тільки для вас двох і котів! 🐈"
-        )
-    } else {
-        listOf(
-            "Котики, ШІ зараз відпочиває, але ви все одно найкраща команда! Насосику, тримайся там в офісі, скоро вечір і відпочинок! ❤️",
-            "Хвилинка мотивації: Насосик підкорює офіс, ти підкорюєш код, а коти підкорюють диван. Ви супер! 🐈"
-        )
-    }
-
-    return fetchFromGemini(finalPrompt, fallbackMessages)
+    return fetchFromGemini(finalPrompt, listOf("Ви супер команда! ❤️"))
 }
 
-fun generateQuoteOfTheDay(): String {
-    val prompt = "Знайди одну дуже потужну, глибоку і надихаючу цитату стоїка, підприємця або філософа. Напиши тільки текст цитати та ім'я автора українською мовою. Без жодних зайвих слів чи вступів."
-
-    val fallbackMessages = listOf(
-        "«Навіть найдовший шлях починається з першого кроку.» — Лао-цзи",
-        "«Те, що нас не вбиває, робить нас сильнішими.» — Фрідріх Ніцше",
-        "«Успіх — це здатність крокувати від однієї невдачі до іншої, не втрачаючи ентузіазму.» — Вінстон Черчилль"
-    )
-
-    return fetchFromGemini(prompt, fallbackMessages)
-}
+fun generateQuoteOfTheDay(): String = fetchFromGemini("Знайди одну дуже потужну, глибоку і надихаючу цитату стоїка, підприємця або філософа українською мовою.", listOf("«Успіх — це здатність крокувати від однієї невдачі до іншої, не втрачаючи ентузіазму.» — Вінстон Черчилль"))

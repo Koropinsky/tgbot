@@ -9,6 +9,8 @@ import kotlinx.coroutines.*
 import java.sql.DriverManager
 import java.sql.Connection
 import com.google.gson.JsonParser
+import com.google.gson.JsonObject
+import com.google.gson.JsonArray
 import java.net.URI
 import java.net.http.HttpClient
 import java.net.http.HttpRequest
@@ -58,9 +60,7 @@ fun initDatabase() {
             getDatabaseConnection().use { conn ->
                 conn.createStatement().execute("ALTER TABLE watched_list ADD COLUMN rating INT DEFAULT 0;")
             }
-        } catch (e: Exception) {
-            // Якщо помилка, значить колонка вже існує, ігноруємо
-        }
+        } catch (e: Exception) {}
 
         println("Database initialized successfully.")
     } catch (e: Exception) { println("Database init error: ${e.message}") }
@@ -245,15 +245,21 @@ fun main() {
 
                         CoroutineScope(Dispatchers.IO).launch {
                             val recommendation = generateRecommendation(category)
-                            val title = recommendation.lines().firstOrNull()?.replace(Regex("[*\"_]"), "")?.trim() ?: "Невідомий тайтл"
 
-                            // Зберігаємо в оперативну пам'ять
-                            lastRecommendations[chatId] = Pair(category, title)
+                            // Якщо це помилка API або фолбек, просто надсилаємо текст БЕЗ кнопок
+                            if (recommendation.startsWith("Помилка API") || recommendation.startsWith("Внутрішня помилка") || recommendation.contains("Здається, я передивився")) {
+                                bot.sendMessage(ChatId.fromId(chatId), "🍿 $recommendation")
+                            } else {
+                                val title = recommendation.lines().firstOrNull()?.replace(Regex("[*\"_]"), "")?.trim() ?: "Невідомий тайтл"
 
-                            val btn = InlineKeyboardMarkup.create(
-                                listOf(listOf(InlineKeyboardButton.CallbackData("👀 Вже дивились", "mark_watched")))
-                            )
-                            bot.sendMessage(ChatId.fromId(chatId), "🍿 $recommendation", replyMarkup = btn)
+                                // Зберігаємо в оперативну пам'ять
+                                lastRecommendations[chatId] = Pair(category, title)
+
+                                val btn = InlineKeyboardMarkup.create(
+                                    listOf(listOf(InlineKeyboardButton.CallbackData("👀 Вже дивились", "mark_watched")))
+                                )
+                                bot.sendMessage(ChatId.fromId(chatId), "🍿 $recommendation", replyMarkup = btn)
+                            }
                         }
                     }
 
@@ -422,22 +428,49 @@ fun updateGoalsMessage(bot: com.github.kotlintelegrambot.Bot, chatId: Long, mess
     }
 }
 
+// === ОНОВЛЕНА БЕЗПЕЧНА ФУНКЦІЯ ДЛЯ ЗАПИТІВ ДО ШІ З ПОШУКОМ ПОМИЛОК ===
 fun fetchFromGemini(prompt: String, fallbackMessages: List<String>): String {
     val apiKey = System.getenv("GEMINI_API_KEY") ?: return fallbackMessages.random()
     val url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key=$apiKey"
-    val jsonBody = """{"contents":[{"parts":[{"text":"${prompt.replace("\"", "\\\"")} "}]}]}"""
+
+    // Використовуємо Gson для створення ідеального JSON, щоб ніякі лапки не ламали запит
+    val jsonBody = JsonObject().apply {
+        add("contents", JsonArray().apply {
+            add(JsonObject().apply {
+                add("parts", JsonArray().apply {
+                    add(JsonObject().apply {
+                        addProperty("text", prompt)
+                    })
+                })
+            })
+        })
+    }.toString()
 
     return try {
         val client = HttpClient.newHttpClient()
-        val request = HttpRequest.newBuilder().uri(URI.create(url)).header("Content-Type", "application/json").POST(HttpRequest.BodyPublishers.ofString(jsonBody)).build()
+        val request = HttpRequest.newBuilder()
+            .uri(URI.create(url))
+            .header("Content-Type", "application/json")
+            .POST(HttpRequest.BodyPublishers.ofString(jsonBody))
+            .build()
+
         val response = client.send(request, HttpResponse.BodyHandlers.ofString())
 
-        if (response.statusCode() != 200) return fallbackMessages.random()
+        if (response.statusCode() != 200) {
+            // Тепер бот скаже, ЯКА САМЕ помилка, замість того, щоб мовчати
+            return "Помилка API ${response.statusCode()}: ${response.body()}"
+        }
 
         JsonParser.parseString(response.body()).asJsonObject.getAsJsonArray("candidates")
-            .get(0).asJsonObject.getAsJsonObject("content").getAsJsonArray("parts")
-            .get(0).asJsonObject.get("text").asString.trim()
-    } catch (e: Exception) { fallbackMessages.random() }
+            .get(0).asJsonObject
+            .getAsJsonObject("content")
+            .getAsJsonArray("parts")
+            .get(0).asJsonObject
+            .get("text").asString.trim()
+
+    } catch (e: Exception) {
+        "Внутрішня помилка: ${e.message}"
+    }
 }
 
 fun generateAiMessage(isMorning: Boolean): String {
@@ -450,13 +483,19 @@ fun generateAiMessage(isMorning: Boolean): String {
         "Напиши мотивуюче ранкове привітання. Побажай мені продуктивного програмування з самого ранку, а Насосику — легкого та успішного початку дня в її офісі. Нехай день пройде на одному диханні.",
         "Напиши ранкове мотиваційне повідомлення, використовуючи метафору з аніме 'Магічна битва' (Jujutsu Kaisen). Натякни, що з самого ранку ми розгортаємо таку 'Територію', де офісна рутина Насосика та мої баги зникнуть перед нашою супер-командою.",
         "Напиши бадьоре ранкове привітання для пари айтішника та офісного працівника. Побажай Насосику швидкої дороги до офісу без заторів, а мені — щоб ранковий сод відразу компилювався.",
-        "Напиши амбітне ранкове повідомлення: сьогодні новий день, щоб зробити наш PushUp ScrollDown ще кращим. Нехай Насосика надихає її ранок в офісі, а мене — мій код."
+        "Напиши амбітне ранкове повідомлення: сьогодні новий день, щоб зробити наш PushUp ScrollDown ще кращим. Нехай Насосика надихає її ранок в офісі, а мене — мій код.",
+        "Напиши ранкове повідомлення про те, як приємно, що в нас обох є свої цілі — у Насосика в офісі, у мене в коді, — але найголовніша мета — це наш спільний затишний вечір.",
+        "Напиши ранковий прогноз: сьогоднішній день для Насосика пройде легко, як по маслу, а в моєму коді не буде жодного 'дедлоку'. Гарного старту!",
+        "Напиши ранкове повідомлення з акцентом на котів: вони вже чекають на нас ввечері, а поки що бажають нам обом продуктивно розібратися зі своїми справами — офісними та розробницькими.",
+        "Напиши мотивацію: кожен виконаний сьогодні таск в офісі чи коді — це ще один крок до нашого успішного релізу PushUp ScrollDown."
     )
+
     val daytimePrompts = listOf(
-        "Напиши дуже ніжне повідомлення, щоб підтримати Насосика посеред її насиченого офісного дня. Нагадай, що вдома на неї чекають коти і хлопець-програміст, який її сильно любить.",
+        "Напиши дуже ніжне повідомлення, щоб підтримати Насосика посеред її насиченого офісного дня. Нагадай, що вдома на неї чекають коти і хлопець-програміст, який її сильно любить і нудьгує.",
         "Напиши мотивуюче повідомлення про наш додаток PushUp ScrollDown. Побажай мені продуктивного програмування, а Насосику — швидкого вирішення офісних справ.",
         "Напиши веселе денне повідомлення в стилі 'Людини-бензопили' (Chainsaw Man). Щось про те, що Насосик на обідній перерві розкидала всі офісні таски, а я розрізав складні алгоритми з енергією Дендзі.",
         "Напиши повідомлення з вайбом 'Аркейну': ми в різних світах (офіс і кодинг), але разом створюємо Хекстек-магію нашого життя.",
+        "Напиши короткий, добрий і життєвий жарт, який змусить Насосика посміхнутися на офісній перерві від звітів, а мене — відволіктися від монітора і розім'ятися.",
         "Напиши життєве повідомлення про те, як коти сумують вдома посеред дня: чекають, поки Насосик приїде з офісу, і лізуть на клавіатуру до мене, поки я намагаюся кодити.",
         "Напиши підтримку: офісні звіти Насосика та мої технічні завдання — це просто крок до нашої спільної мети. Ви супер!",
         "Напиши підтримку: навіть якщо сьогоднішній день здається нескінченним, пам'ятай — ми з Насосиком супергерої, які просто прикидаються звичайними людьми в офісі та за монітором.",
@@ -464,6 +503,7 @@ fun generateAiMessage(isMorning: Boolean): String {
         "Напиши повідомлення про те, як важливо в робочому хаосі знайти хвилину, щоб випити смачної кави й згадати, що ми команда. Насосик, ти молодець, тримайся там!",
         "Напиши повідомлення з вайбом 'спокою посеред шторму': у Насосика в офісі — дедлайни, у мене — баги, але вдома — спокій, коти й наш спільний світ."
     )
+
     val eveningPrompts = listOf(
         "Напиши затишне вечірнє повідомлення. Робочий день закінчився, офіс і код позаду. Час насолодитися вечором разом.",
         "Напиши повідомлення про те, як класно бути вдома: коти, затишок, жодних нарад чи багів. Вечір належить тільки нам.",
@@ -476,10 +516,43 @@ fun generateAiMessage(isMorning: Boolean): String {
         "Напиши повідомлення про те, що робота — це лише спосіб оплатити наш спільний затишний вечір. Ми це зробили!"
     )
 
-    val selectedList = when { isMorning -> morningPrompts; isEvening -> eveningPrompts; else -> daytimePrompts }
-    val finalPrompt = "${selectedList.random()} ВАЖЛИВО: Напиши лише сам текст повідомлення українською мовою. Без лапок, без вступних слів і привітань."
+    val selectedList = when {
+        isMorning -> morningPrompts
+        isEvening -> eveningPrompts
+        else -> daytimePrompts
+    }
 
-    return fetchFromGemini(finalPrompt, listOf("Ви супер команда! ❤️"))
+    val selectedPrompt = selectedList.random()
+    val finalPrompt = "$selectedPrompt ВАЖЛИВО: Напиши лише сам текст повідомлення українською мовою. Без лапок, без вступних слів і привітань."
+
+    val fallbackMessages = if (isMorning) {
+        listOf(
+            "Доброго ранку, соні! ☕️ Кава готова, коти нагодовані. Насосику — легкого дня в офісі, а тобі — успішного коду!",
+            "З новим ранком! 🌅 Нехай кава додасть енергії, баги самі злякаються, а офісні таски Насті вирішаться клацанням пальців!"
+        )
+    } else if (isEvening) {
+        listOf(
+            "Робочий день позаду! Котики чекають, кава гріється. Насолоджуйтесь вечором, ви найкраща команда! ❤️",
+            "Час відкласти звіти і код. Сьогоднішній вечір тільки для вас двох і котів! 🐈"
+        )
+    } else {
+        listOf(
+            "Котики, ШІ зараз відпочиває, але ви все одно найкраща команда! Насосику, тримайся там в офісі, скоро вечір і відпочинок! ❤️",
+            "Хвилинка мотивації: Насосик підкорює офіс, ти підкорюєш код, а коти підкорюють диван. Ви супер! 🐈"
+        )
+    }
+
+    return fetchFromGemini(finalPrompt, fallbackMessages)
 }
 
-fun generateQuoteOfTheDay(): String = fetchFromGemini("Знайди одну дуже потужну, глибоку і надихаючу цитату стоїка, підприємця або філософа українською мовою.", listOf("«Успіх — це здатність крокувати від однієї невдачі до іншої, не втрачаючи ентузіазму.» — Вінстон Черчилль"))
+fun generateQuoteOfTheDay(): String {
+    val prompt = "Знайди одну дуже потужну, глибоку і надихаючу цитату стоїка, підприємця або філософа. Напиши тільки текст цитати та ім'я автора українською мовою. Без жодних зайвих слів чи вступів."
+
+    val fallbackMessages = listOf(
+        "«Навіть найдовший шлях починається з першого кроку.» — Лао-цзи",
+        "«Те, що нас не вбиває, робить нас сильнішими.» — Фрідріх Ніцше",
+        "«Успіх — це здатність крокувати від однієї невдачі до іншої, не втрачаючи ентузіазму.» — Вінстон Черчилль"
+    )
+
+    return fetchFromGemini(prompt, fallbackMessages)
+}

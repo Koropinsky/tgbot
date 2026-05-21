@@ -133,11 +133,58 @@ fun Dispatcher.setupBotHandlers() {
                 }
             }
 
+            safeText.startsWith("+я", ignoreCase = true) -> {
+                val taskText = safeText.substring(2).trim()
+                if (taskText.isNotEmpty()) {
+                    addTask(null, "YA", taskText)
+                    bot.sendMessage(ChatId.fromId(chatId), "✅ Особисте завдання для **Я** додано:\n`$taskText`")
+                }
+            }
+            safeText.startsWith("+н", ignoreCase = true) -> {
+                val taskText = safeText.substring(2).trim()
+                if (taskText.isNotEmpty()) {
+                    addTask(null, "N", taskText)
+                    bot.sendMessage(ChatId.fromId(chatId), "✅ Особисте завдання для **Насосика** додано:\n`$taskText`")
+                }
+            }
+            safeText.startsWith("-я", ignoreCase = true) -> {
+                val taskText = safeText.substring(2).trim()
+                if (taskText.isNotEmpty()) {
+                    val deleted = deletePersonalTaskByName("YA", taskText)
+                    if (deleted) {
+                        bot.sendMessage(ChatId.fromId(chatId), "🎉 Завдання для **Я** виконано та видалено:\n`$taskText`")
+                    } else {
+                        bot.sendMessage(ChatId.fromId(chatId), "❓ Не знайдено активного завдання для **Я** з текстом:\n`$taskText`")
+                    }
+                }
+            }
+            safeText.startsWith("-н", ignoreCase = true) -> {
+                val taskText = safeText.substring(2).trim()
+                if (taskText.isNotEmpty()) {
+                    val deleted = deletePersonalTaskByName("N", taskText)
+                    if (deleted) {
+                        bot.sendMessage(ChatId.fromId(chatId), "🎉 Завдання для **Насосика** виконано та видалено:\n`$taskText`")
+                    } else {
+                        bot.sendMessage(ChatId.fromId(chatId), "❓ Не знайдено активного завдання для **Насосика** з текстом:\n`$taskText`")
+                    }
+                }
+            }
             safeText.startsWith("+") -> {
                 val item = safeText.removePrefix("+").trim()
                 if (item.isNotEmpty()) {
                     addShoppingItem(item)
                     bot.sendMessage(ChatId.fromId(chatId), "✅ `$item` додано до покупок!")
+                }
+            }
+            safeText.startsWith("-") -> {
+                val item = safeText.removePrefix("-").trim()
+                if (item.isNotEmpty()) {
+                    val deleted = deleteShoppingItemByName(item)
+                    if (deleted) {
+                        bot.sendMessage(ChatId.fromId(chatId), "✅ `$item` видалено зі списку покупок!")
+                    } else {
+                        bot.sendMessage(ChatId.fromId(chatId), "❓ Не знайдено покупку з назвою:\n`$item`")
+                    }
                 }
             }
             safeText.startsWith("*") -> {

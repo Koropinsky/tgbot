@@ -88,6 +88,12 @@ fun deleteShoppingItem(id: Int) = getDatabaseConnection().use { conn ->
     conn.prepareStatement("DELETE FROM shopping_list WHERE id = ?").apply { setInt(1, id); executeUpdate() }
 }
 
+fun deleteShoppingItemByName(item: String): Boolean = getDatabaseConnection().use { conn ->
+    val ps = conn.prepareStatement("DELETE FROM shopping_list WHERE LOWER(TRIM(item)) = LOWER(TRIM(?))")
+    ps.setString(1, item)
+    ps.executeUpdate() > 0
+}
+
 fun getGoalsList(): List<Pair<Int, String>> = mutableListOf<Pair<Int, String>>().apply {
     getDatabaseConnection().use { conn ->
         val rs = conn.createStatement().executeQuery("SELECT id, goal FROM goals_list ORDER BY id")
@@ -178,6 +184,13 @@ fun deleteTask(id: Int) = getDatabaseConnection().use { conn ->
         setInt(1, id)
         executeUpdate()
     }
+}
+
+fun deletePersonalTaskByName(assignee: String, taskText: String): Boolean = getDatabaseConnection().use { conn ->
+    val ps = conn.prepareStatement("DELETE FROM tasks WHERE project_id IS NULL AND assignee = ? AND LOWER(TRIM(task_text)) = LOWER(TRIM(?))")
+    ps.setString(1, assignee)
+    ps.setString(2, taskText)
+    ps.executeUpdate() > 0
 }
 
 // === СІМЕЙНИЙ КАЛЕНДАР ===

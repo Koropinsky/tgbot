@@ -53,6 +53,43 @@ fun fetchFromGemini(prompt: String, fallbackMessages: List<String>): String {
     }
 }
 
+// === ФУНКЦІЯ ІНТЕЛЕКТУАЛЬНОГО ДОДАВАННЯ/ОНОВЛЕННЯ З ШІ ===
+fun addOrUpdateWatchedItemIntelligently(category: String, rawTitle: String, rating: Int): Boolean {
+    val existingItems = getWatchedListWithRatings(category)
+    if (existingItems.isEmpty()) {
+        addWatchedItem(category, rawTitle, rating)
+        return false
+    }
+
+    val listStr = existingItems.joinToString(", ") { it.first }
+    val prompt = """
+        Ось назва фільму/серіалу/аніме, яку ввів користувач: "$rawTitle".
+        Ось список того, що вже є в базі: [$listStr].
+        
+        Чи є "$rawTitle" тим самим твором (враховуючи переклади, оригінальні назви або друкарські помилки), що й якийсь із списку?
+        Якщо ТАК, напиши ТІЛЬКИ точну назву зі списку, з якою відбувся збіг.
+        Якщо НІ, напиши слово "NEW".
+        Не пиши жодних інших слів.
+    """.trimIndent()
+    
+    val response = fetchFromGemini(prompt, listOf("NEW"))
+    
+    if (response.trim() == "NEW" || response.contains("Помилка API") || response.contains("Внутрішня помилка")) {
+        addWatchedItem(category, rawTitle, rating)
+        return false
+    } else {
+        val matchedTitle = response.trim()
+        val exists = existingItems.any { it.first.equals(matchedTitle, ignoreCase = true) }
+        if (exists) {
+            updateWatchedItemRating(category, matchedTitle, rating)
+            return true
+        } else {
+            addWatchedItem(category, rawTitle, rating)
+            return false
+        }
+    }
+}
+
 // === ФУНКЦІЯ РОЗУМНИХ РЕКОМЕНДАЦІЙ З ОЦІНКАМИ ===
 fun generateRecommendation(category: String): String {
     val watchedItems = getWatchedListWithRatings(category)
@@ -77,15 +114,25 @@ fun generateRecommendation(category: String): String {
 
     val prompt = "Порекомендуй один $categoryContext для вечірнього перегляду для пари. $extraAnimeContext $watchedContext " +
             "ВАЖЛИВО: Відповідь має складатися з двох частин. " +
-            "На САМОМУ ПЕРШОМУ РЯДКУ напиши ТІЛЬКИ назву оригіналу (без слів 'Назва', без лапок, без зірочок). " +
+            "На САМОМУ ПЕРШОМУ РЯДКУ напиши ТІЛЬКИ назву українською мовою (без слів 'Назва', без лапок, без зірочок). " +
             "Починаючи з другого рядка напиши короткий і захоплюючий опис без спойлерів українською мовою."
 
     return fetchFromGemini(prompt, listOf("Здається, я передивився всі бази! Спробуйте ще раз пізніше. 😅"))
 }
 
 fun generateAiMessage(isMorning: Boolean): String {
-    val currentHour = ZonedDateTime.now(ZoneId.of("Europe/Kyiv")).hour
+    val now = ZonedDateTime.now(ZoneId.of("Europe/Kyiv"))
+    val currentHour = now.hour
     val isEvening = currentHour >= 18
+    val isWeekend = now.dayOfWeek == java.time.DayOfWeek.SATURDAY || now.dayOfWeek == java.time.DayOfWeek.SUNDAY
+
+    val weekendPrompts = listOf(
+        "Напиши розслаблене повідомлення для вихідного дня. Ніякого офісу і коду, тільки ми, коти і плани на відпочинок.",
+        "Напиши веселе повідомлення: сьогодні вихідний! Можна валятися в ліжку хоч до обіду, гратися з котами і просто насолоджуватися часом разом.",
+        "Напиши ніжне повідомлення про те, як класно проводити вихідні вдвох. Забудьте про дедлайни, сьогодні час для відпочинку, кіно та затишку.",
+        "Напиши про те, що вихідні — це час для підзарядки. Сьогодні ніяких звітів чи алгоритмів, тільки смачна їжа, серіали та наші котики.",
+        "Напиши повідомлення-нагадування: сьогодні вихідний, а значить єдиний важливий таск на день — це добре відпочити разом."
+    )
 
     val morningPrompts = listOf(
         "Напиши миле ранкове повідомлення для мене та моєї дівчини Насосика. Згадай, як чудово починати день разом, коли крапельна кавоварка вже заварила нам свіжу каву перед тим, як вона поїде в офіс, а я сяду за код.",
@@ -127,6 +174,7 @@ fun generateAiMessage(isMorning: Boolean): String {
     )
 
     val selectedList = when {
+        isWeekend -> weekendPrompts
         isMorning -> morningPrompts
         isEvening -> eveningPrompts
         else -> daytimePrompts
@@ -135,7 +183,12 @@ fun generateAiMessage(isMorning: Boolean): String {
     val selectedPrompt = selectedList.random()
     val finalPrompt = "$selectedPrompt ВАЖЛИВО: Напиши лише сам текст повідомлення українською мовою. Без лапок, без вступних слів і привітань."
 
-    val fallbackMessages = if (isMorning) {
+    val fallbackMessages = if (isWeekend) {
+        listOf(
+            "Ура, вихідні! 🎉 Забуваємо про офіс та код, насолоджуємося відпочинком і компанією одне одного (та котів, звісно).",
+            "Сьогодні ніяких дедлайнів! Лише затишок, релакс і гарний настрій на всі вихідні. 🐈"
+        )
+    } else if (isMorning) {
         listOf(
             "Доброго ранку, соні! ☕️ Кава готова, коти нагодовані. Насосику — легкого дня в офісі, а тобі — успішного коду!",
             "З новим ранком! 🌅 Нехай кава додасть енергії, баги самі злякаються, а офісні таски Насті вирішаться клацанням пальців!"

@@ -73,6 +73,15 @@ fun addWatchedItem(category: String, title: String, rating: Int) = getDatabaseCo
     }
 }
 
+fun updateWatchedItemRating(category: String, title: String, rating: Int) = getDatabaseConnection().use { conn ->
+    conn.prepareStatement("UPDATE watched_list SET rating = ? WHERE category = ? AND title = ?").apply {
+        setInt(1, rating)
+        setString(2, category)
+        setString(3, title)
+        executeUpdate()
+    }
+}
+
 fun getShoppingList(): List<Pair<Int, String>> = mutableListOf<Pair<Int, String>>().apply {
     getDatabaseConnection().use { conn ->
         val rs = conn.createStatement().executeQuery("SELECT id, item FROM shopping_list ORDER BY id")

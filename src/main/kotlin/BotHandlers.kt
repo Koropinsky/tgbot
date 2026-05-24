@@ -418,13 +418,20 @@ fun Dispatcher.setupBotHandlers() {
                 val rec = lastRecommendations[chatId]
 
                 if (rec != null) {
-                    addWatchedItem(rec.first, rec.second, rating)
-                    bot.answerCallbackQuery(callbackQuery.id, "✅ Оцінка $rating⭐ збережена!")
-
+                    bot.answerCallbackQuery(callbackQuery.id, "⏳ Зберігаю...")
                     if (messageId != null) {
                         bot.editMessageReplyMarkup(ChatId.fromId(chatId), messageId, replyMarkup = null)
                     }
-                    bot.sendMessage(ChatId.fromId(chatId), "Запам'ятав! Ви оцінили «${rec.second}» на $rating⭐. ШІ врахує це наступного разу!")
+                    bot.sendMessage(ChatId.fromId(chatId), "⏳ Перевіряю базу та зберігаю оцінку $rating⭐ для «${rec.second}»...")
+
+                    CoroutineScope(Dispatchers.IO).launch {
+                        val isUpdated = addOrUpdateWatchedItemIntelligently(rec.first, rec.second, rating)
+                        if (isUpdated) {
+                            bot.sendMessage(ChatId.fromId(chatId), "✅ Оцінку для «${rec.second}» успішно оновлено на $rating⭐! ШІ врахує це.")
+                        } else {
+                            bot.sendMessage(ChatId.fromId(chatId), "✅ Збережено! Ви оцінили «${rec.second}» на $rating⭐. ШІ врахує це наступного разу!")
+                        }
+                    }
                     lastRecommendations.remove(chatId)
                 } else {
                     bot.answerCallbackQuery(callbackQuery.id, "Помилка збереження.", showAlert = true)

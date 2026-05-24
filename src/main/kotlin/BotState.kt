@@ -8,7 +8,8 @@ enum class BotState {
     ADDING_TASK_YA,
     ADDING_TASK_N,
     ADDING_PROJECT_NAME,
-    ADDING_TASK_PROJECT
+    ADDING_TASK_PROJECT,
+    ADDING_WATCHED_TITLE
 }
 
 // Пам'ять для тимчасового збереження стану користувача (додавання покупок/цілей/завдань)
@@ -19,3 +20,6 @@ val lastRecommendations = ConcurrentHashMap<Long, Pair<String, String>>()
 
 // Пам'ять для збереження ID проекту, в який зараз додається таск користувачем
 val activeProjectForUser = ConcurrentHashMap<Long, Int>()
+
+// Пам'ять для збереження категорії при ручному додаванні переглянутого
+val pendingWatchedCategory = ConcurrentHashMap<Long, String>()

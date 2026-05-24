@@ -18,7 +18,8 @@ fun Dispatcher.setupBotHandlers() {
             keyboard = listOf(
                 listOf(KeyboardButton("🛒 Список покупок"), KeyboardButton("🎯 Наші цілі")),
                 listOf(KeyboardButton("📅 Календар подій"), KeyboardButton("💻 Проекти")),
-                listOf(KeyboardButton("✨ Надихни нас"), KeyboardButton("🍿 Порекомендуй щось"))
+                listOf(KeyboardButton("✨ Надихни нас"), KeyboardButton("🍿 Порекомендуй щось")),
+                listOf(KeyboardButton("📋 Переглянуте"))
             ),
             resizeKeyboard = true
         )
@@ -85,6 +86,24 @@ fun Dispatcher.setupBotHandlers() {
                     showProjectTasks(bot, chatId, projectId)
                 }
             }
+            state == BotState.ADDING_WATCHED_TITLE -> {
+                if (safeText.isNotEmpty()) {
+                    val category = pendingWatchedCategory[chatId] ?: "movie"
+                    lastRecommendations[chatId] = Pair(category, safeText)
+                    pendingWatchedCategory.remove(chatId)
+                    userStates[chatId] = BotState.NONE
+                    val ratingKeyboard = InlineKeyboardMarkup.create(
+                        listOf(listOf(
+                            InlineKeyboardButton.CallbackData("1⭐", "rate_1"),
+                            InlineKeyboardButton.CallbackData("2⭐", "rate_2"),
+                            InlineKeyboardButton.CallbackData("3⭐", "rate_3"),
+                            InlineKeyboardButton.CallbackData("4⭐", "rate_4"),
+                            InlineKeyboardButton.CallbackData("5⭐", "rate_5")
+                        ))
+                    )
+                    bot.sendMessage(ChatId.fromId(chatId), "Оцініть «$safeText» від 1 до 5:", replyMarkup = ratingKeyboard)
+                }
+            }
             state == BotState.ADDING_CALENDAR_EVENT -> {
                 if (safeText.isNotEmpty()) {
                     val regex = Regex("""^(\d{2})\.(\d{2})\.(\d{4})\s+(.+)$""")
@@ -125,6 +144,18 @@ fun Dispatcher.setupBotHandlers() {
                 bot.sendMessage(ChatId.fromId(chatId), "Що будемо дивитися?", replyMarkup = inlineKeyboard)
             }
 
+            safeText == "📋 Переглянуте" -> {
+                val inlineKeyboard = InlineKeyboardMarkup.create(
+                    listOf(
+                        listOf(
+                            InlineKeyboardButton.CallbackData("🎬 Фільм", "manual_add_movie"),
+                            InlineKeyboardButton.CallbackData("📺 Серіал", "manual_add_series"),
+                            InlineKeyboardButton.CallbackData("⛩️ Аніме", "manual_add_anime")
+                        )
+                    )
+                )
+                bot.sendMessage(ChatId.fromId(chatId), "Що додаємо до переглянутого?", replyMarkup = inlineKeyboard)
+            }
             safeText == "✨ Надихни нас" -> {
                 bot.sendMessage(ChatId.fromId(chatId), "⏳ Запитую ШІ...")
                 CoroutineScope(Dispatchers.IO).launch {
@@ -304,6 +335,21 @@ fun Dispatcher.setupBotHandlers() {
                 deleteCalendarEvent(id)
                 bot.answerCallbackQuery(callbackQuery.id, "Видалено з календаря!")
                 if (messageId != null) updateCalendarMessage(bot, chatId, messageId)
+            }
+
+            // Ручне додавання переглянутого
+            data == "manual_add_movie" || data == "manual_add_series" || data == "manual_add_anime" -> {
+                val category = data.removePrefix("manual_add_")
+                pendingWatchedCategory[chatId] = category
+                userStates[chatId] = BotState.ADDING_WATCHED_TITLE
+                val categoryName = when (category) {
+                    "movie" -> "фільм"
+                    "series" -> "серіал"
+                    "anime" -> "аніме"
+                    else -> "контент"
+                }
+                bot.sendMessage(ChatId.fromId(chatId), "📝 Введіть назву ($categoryName):")
+                bot.answerCallbackQuery(callbackQuery.id)
             }
 
             // Рекомендації аніме/кіно

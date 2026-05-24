@@ -18,12 +18,26 @@ fun Dispatcher.setupBotHandlers() {
             keyboard = listOf(
                 listOf(KeyboardButton("🛒 Список покупок"), KeyboardButton("🎯 Наші цілі")),
                 listOf(KeyboardButton("📅 Календар подій"), KeyboardButton("💻 Проекти")),
+                listOf(KeyboardButton("👤 Таски Я"), KeyboardButton("👤 Таски Н")),
                 listOf(KeyboardButton("✨ Надихни нас"), KeyboardButton("🍿 Порекомендуй щось")),
                 listOf(KeyboardButton("📋 Переглянуте"))
             ),
             resizeKeyboard = true
         )
-        bot.sendMessage(ChatId.fromId(chatId), "Привіт! Я ваш сімейний бот. Все готово до роботи!", replyMarkup = keyboard)
+        val welcome = """
+            Привіт! Я ваш сімейний бот 👋
+
+            📌 Що я вмію:
+            🛒 *Список покупок* — натисни або пиши `+молоко` / `-молоко`
+            🎯 *Наші цілі* — спільні довгострокові цілі (або `*назва`)
+            📅 *Календар подій* — плануй важливі дати
+            💻 *Проекти* — спільні завдання за проектами
+            👤 *Таски Я / Таски Н* — особисті завдання (або `+я завдання` / `+н завдання`)
+            🍿 *Порекомендуй щось* — ШІ підбере фільм, серіал або аніме
+            📋 *Переглянуте* — додай що дивились з оцінкою 1–5⭐
+            ✨ *Надихни нас* — мотиваційне повідомлення від ШІ
+        """.trimIndent()
+        bot.sendMessage(ChatId.fromId(chatId), welcome, parseMode = com.github.kotlintelegrambot.entities.ParseMode.MARKDOWN, replyMarkup = keyboard)
     }
 
     text {
@@ -132,7 +146,9 @@ fun Dispatcher.setupBotHandlers() {
             safeText == "🛒 Список покупок" -> showShoppingList(bot, chatId)
             safeText == "🎯 Наші цілі" -> showGoalsList(bot, chatId)
             safeText == "📅 Календар подій" -> showCalendarEvents(bot, chatId)
-            safeText == "💻 Проекти" -> showTasksMainMenu(bot, chatId)
+            safeText == "💻 Проекти" -> showProjectsList(bot, chatId)
+            safeText == "👤 Таски Я" -> showPersonalTasks(bot, chatId, "YA")
+            safeText == "👤 Таски Н" -> showPersonalTasks(bot, chatId, "N")
 
             safeText == "🍿 Порекомендуй щось" -> {
                 val inlineKeyboard = InlineKeyboardMarkup.create(
